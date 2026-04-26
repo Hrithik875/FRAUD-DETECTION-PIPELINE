@@ -5,10 +5,25 @@
 
 import sys
 import os
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-
-# Fix Windows Unicode issues
 sys.stdout.reconfigure(encoding='utf-8')
+
+# ── Path Setup (handles spaces in Windows paths) ──────────────────────
+STREAM_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR   = os.path.abspath(os.path.join(STREAM_DIR, '..'))
+sys.path.append(BASE_DIR)
+
+# Checkpoint paths — forward slashes for Spark on Windows
+CHECKPOINT_TXN = os.path.join(
+    BASE_DIR, 'data_output', 'checkpoints', 'transactions'
+).replace('\\', '/')
+
+CHECKPOINT_MERCHANT = os.path.join(
+    BASE_DIR, 'data_output', 'checkpoints', 'merchants'
+).replace('\\', '/')
+
+print(f"BASE_DIR         : {BASE_DIR}")
+print(f"CHECKPOINT_TXN   : {CHECKPOINT_TXN}")
+print(f"CHECKPOINT_MERCHANT: {CHECKPOINT_MERCHANT}")
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
@@ -52,38 +67,28 @@ HIGH_RISK_CATS      = ["Crypto", "Wire Transfer",
                         "Gift Cards", "Jewelry"]
 MEDIUM_CATS         = ["Travel", "Electronics"]
 
+
 # ── Fraud Scoring UDF ─────────────────────────────────────────────────
 def compute_fraud_score(amount, country, category,
                          anomaly_score, home_country):
     score = 0.0
-
-    # Rule 1: Amount
     if amount is not None:
         if amount > 8000:   score += 0.40
         elif amount > 5000: score += 0.25
         elif amount > 2000: score += 0.10
         elif amount > 1000: score += 0.05
-
-    # Rule 2: Geographic risk
     if country is not None:
         if country in HIGH_RISK_COUNTRIES: score += 0.30
         elif country in MEDIUM_RISK:       score += 0.10
-
-    # Rule 3: Merchant category risk
     if category is not None:
         if category in HIGH_RISK_CATS: score += 0.20
         elif category in MEDIUM_CATS:  score += 0.05
-
-    # Rule 4: Behavioral anomaly
     if anomaly_score is not None:
         score += anomaly_score * 0.25
-
-    # Rule 5: Geographic anomaly
     if (home_country and country
             and home_country != country
             and country in HIGH_RISK_COUNTRIES):
         score += 0.15
-
     return round(min(score, 1.0), 3)
 
 
@@ -91,20 +96,19 @@ fraud_score_udf = udf(compute_fraud_score, DoubleType())
 
 
 def classify_label(score):
-    if score is None:    return "LEGIT"
-    if score >= 0.65:    return "FRAUD"
-    elif score >= 0.35:  return "SUSPICIOUS"
+    if score is None:   return "LEGIT"
+    if score >= 0.65:   return "FRAUD"
+    elif score >= 0.35: return "SUSPICIOUS"
     return "LEGIT"
 
 
 classify_udf = udf(classify_label, StringType())
 
 
-# ── PostgreSQL Writer — Transactions ──────────────────────────────────
+# ── Writers ───────────────────────────────────────────────────────────
 def write_transactions_to_postgres(batch_df, batch_id):
     if batch_df.count() == 0:
         return
-
     try:
         batch_df.write \
             .format("jdbc") \
@@ -122,23 +126,17 @@ def write_transactions_to_postgres(batch_df, batch_id):
         suspicious = batch_df.filter(
                         col("fraud_label") == "SUSPICIOUS").count()
         legit      = total - fraud - suspicious
-
-        print(f"\n  [BATCH {batch_id}] Written to PostgreSQL")
-        print(f"  Total={total} | "
-              f"FRAUD={fraud} | "
-              f"SUSPICIOUS={suspicious} | "
-              f"LEGIT={legit}")
-
+        print(f"\n  [BATCH {batch_id}] -> PostgreSQL | "
+              f"Total={total} FRAUD={fraud} "
+              f"SUSPICIOUS={suspicious} LEGIT={legit}")
     except Exception as e:
-        print(f"  [ERROR] Batch {batch_id} transactions: {str(e)}")
+        print(f"  [ERROR] Batch {batch_id}: {str(e)}")
         raise
 
 
-# ── PostgreSQL Writer — Merchant Stats ───────────────────────────────
 def write_merchant_stats_to_postgres(batch_df, batch_id):
     if batch_df.count() == 0:
         return
-
     try:
         batch_df.write \
             .format("jdbc") \
@@ -149,12 +147,10 @@ def write_merchant_stats_to_postgres(batch_df, batch_id):
             .option("driver", "org.postgresql.Driver") \
             .mode("append") \
             .save()
-
-        print(f"  [BATCH {batch_id}] Merchant stats written "
-              f"({batch_df.count()} merchants)")
-
+        print(f"  [BATCH {batch_id}] Merchant stats -> PostgreSQL "
+              f"({batch_df.count()} rows)")
     except Exception as e:
-        print(f"  [ERROR] Batch {batch_id} merchant stats: {str(e)}")
+        print(f"  [ERROR] Merchant stats: {str(e)}")
         raise
 
 
@@ -164,12 +160,18 @@ def main():
     print("  FRAUD DETECTION - SPARK STREAMING ENGINE")
     print("=" * 62)
 
+    # ── Verify checkpoint dirs exist ──────────────────────
+    for path in [CHECKPOINT_TXN, CHECKPOINT_MERCHANT]:
+        os.makedirs(path, exist_ok=True)
+        print(f"[OK] Checkpoint dir: {path}")
+
     # ── Spark Session ─────────────────────────────────────
     spark = SparkSession.builder \
         .appName(cfg.SPARK_APP_NAME) \
         .config("spark.sql.shuffle.partitions", "4") \
         .config(
-            "spark.streaming.stopGracefullyOnShutdown", "true"
+            "spark.streaming.stopGracefullyOnShutdown",
+            "true"
         ) \
         .config(
             "spark.jars.packages",
@@ -179,9 +181,9 @@ def main():
         .getOrCreate()
 
     spark.sparkContext.setLogLevel("WARN")
-
-    print(f"[OK] Spark Session: {cfg.SPARK_APP_NAME}")
-    print(f"[OK] Kafka: {cfg.KAFKA_BROKER} | Topic: {cfg.KAFKA_TOPIC}")
+    print(f"[OK] Spark Session started")
+    print(f"[OK] Kafka: {cfg.KAFKA_BROKER} | "
+          f"Topic: {cfg.KAFKA_TOPIC}")
 
     # ── Read from Kafka ───────────────────────────────────
     raw_stream = spark.readStream \
@@ -194,7 +196,7 @@ def main():
 
     print("[OK] Kafka stream connected")
 
-    # ── Parse JSON ────────────────────────────────────────
+    # ── Parse + Score ─────────────────────────────────────
     parsed = raw_stream.select(
         from_json(
             col("value").cast("string"),
@@ -202,7 +204,6 @@ def main():
         ).alias("data")
     ).select("data.*")
 
-    # ── Apply Fraud Scoring ───────────────────────────────
     scored = parsed \
         .withColumn(
             "fraud_score",
@@ -227,7 +228,7 @@ def main():
             current_timestamp()
         )
 
-    # ── Select exact columns matching DB schema ───────────
+    # ── Transaction output columns ────────────────────────
     transactions_out = scored.select(
         col("transaction_id"),
         col("amount"),
@@ -246,18 +247,13 @@ def main():
     )
 
     # ── Stream 1: Transactions ────────────────────────────
-    checkpoint_txn = os.path.join(
-        os.path.dirname(__file__),
-        '..', 'data_output', 'checkpoints', 'transactions'
-    )
-
     txn_query = transactions_out.writeStream \
         .foreachBatch(write_transactions_to_postgres) \
-        .option("checkpointLocation", checkpoint_txn) \
+        .option("checkpointLocation", CHECKPOINT_TXN) \
         .trigger(processingTime="10 seconds") \
         .start()
 
-    print("[OK] Transaction stream started (10s micro-batches)")
+    print("[OK] Transaction stream started (10s batches)")
 
     # ── Merchant Aggregation ──────────────────────────────
     merchant_agg = scored \
@@ -280,9 +276,7 @@ def main():
                 when(col("fraud_label") == "SUSPICIOUS", 1)
                 .otherwise(0)
             ).alias("suspicious_count"),
-            spark_round(
-                avg("amount"), 2
-            ).alias("avg_amount"),
+            spark_round(avg("amount"), 2).alias("avg_amount"),
             spark_round(
                 avg("fraud_score"), 3
             ).alias("avg_fraud_score")
@@ -290,7 +284,8 @@ def main():
         .withColumn(
             "fraud_rate",
             spark_round(
-                col("fraud_count") / col("total_transactions"), 4
+                col("fraud_count") /
+                col("total_transactions"), 4
             )
         ) \
         .select(
@@ -308,19 +303,14 @@ def main():
         )
 
     # ── Stream 2: Merchant Stats ──────────────────────────
-    checkpoint_merchant = os.path.join(
-        os.path.dirname(__file__),
-        '..', 'data_output', 'checkpoints', 'merchants'
-    )
-
     merchant_query = merchant_agg.writeStream \
         .foreachBatch(write_merchant_stats_to_postgres) \
-        .option("checkpointLocation", checkpoint_merchant) \
+        .option("checkpointLocation", CHECKPOINT_MERCHANT) \
         .trigger(processingTime="30 seconds") \
         .outputMode("update") \
         .start()
 
-    print("[OK] Merchant aggregation stream started (30s windows)")
+    print("[OK] Merchant stats stream started (30s batches)")
     print("\n" + "=" * 62)
     print("  STREAMING IN PROGRESS - Waiting for data...")
     print("  Press Ctrl+C to stop")
