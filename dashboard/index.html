@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Real-Time Fraud Detection Dashboard</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+  <style>
+    /* ── Reset & Base ── */
+    * { margin:0; padding:0; box-sizing:border-box; }
+
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #0d1117;
+      color: #e6edf3;
+      min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    .header {
+      background: linear-gradient(135deg, #161b22, #1f2937);
+      border-bottom: 1px solid #30363d;
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .header h1 {
+      font-size: 1.3rem;
+      font-weight: 700;
+      color: #f0f6fc;
+    }
+
+    .header h1 span { color: #f85149; }
+
+    .live-badge {
+      background: #1a4731;
+      border: 1px solid #2ea043;
+      color: #3fb950;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.5; }
+    }
+
+    /* ── Layout ── */
+    .container { padding: 20px 24px; }
+
+    /* ── Summary Cards ── */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      padding: 18px 20px;
+    }
+
+    .card .label {
+      font-size: 0.72rem;
+      color: #8b949e;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
+    }
+
+    .card .value {
+      font-size: 1.9rem;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    .card .sub {
+      font-size: 0.75rem;
+      color: #8b949e;
+      margin-top: 4px;
+    }
+
+    .card.red   { border-left: 3px solid #f85149; }
+    .card.red   .value { color: #f85149; }
+    .card.yellow{ border-left: 3px solid #e3b341; }
+    .card.yellow .value { color: #e3b341; }
+    .card.green { border-left: 3px solid #3fb950; }
+    .card.green .value { color: #3fb950; }
+    .card.blue  { border-left: 3px solid #58a6ff; }
+    .card.blue  .value { color: #58a6ff; }
+
+    /* ── Charts Row ── */
+    .charts-row {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .chart-box {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      padding: 18px;
+    }
+
+    .chart-box h3 {
+      font-size: 0.85rem;
+      color: #8b949e;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 14px;
+    }
+
+    .chart-box canvas { width: 100% !important; }
+
+    /* ── Bottom Row ── */
+    .bottom-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 16px;
+    }
+
+    /* ── Tables ── */
+    .table-box {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      padding: 18px;
+      overflow: hidden;
+    }
+
+    .table-box h3 {
+      font-size: 0.85rem;
+      color: #8b949e;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 14px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.78rem;
+    }
+
+    th {
+      text-align: left;
+      color: #8b949e;
+      padding: 6px 8px;
+      border-bottom: 1px solid #21262d;
+      font-weight: 500;
+    }
+
+    td {
+      padding: 7px 8px;
+      border-bottom: 1px solid #161b22;
+      color: #c9d1d9;
+    }
+
+    tr:hover td { background: #1f2937; }
+
+    /* ── Feed ── */
+    .feed {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      padding: 18px;
+      max-height: 340px;
+      overflow-y: auto;
+    }
+
+    .feed h3 {
+      font-size: 0.85rem;
+      color: #8b949e;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 14px;
+    }
+
+    .feed-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 8px 0;
+      border-bottom: 1px solid #21262d;
+      font-size: 0.78rem;
+    }
+
+    .feed-item:last-child { border-bottom: none; }
+
+    .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      margin-top: 4px;
+      flex-shrink: 0;
+    }
+
+    .dot.fraud      { background: #f85149; }
+    .dot.suspicious { background: #e3b341; }
+    .dot.legit      { background: #3fb950; }
+
+    .feed-merchant { font-weight: 600; color: #f0f6fc; }
+    .feed-details  { color: #8b949e; }
+
+    /* ── Badge ── */
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 0.68rem;
+      font-weight: 700;
+    }
+
+    .badge.FRAUD      { background:#3d1a1a; color:#f85149; }
+    .badge.SUSPICIOUS { background:#3d2e0a; color:#e3b341; }
+    .badge.LEGIT      { background:#0d2818; color:#3fb950; }
+
+    /* ── Score Bar ── */
+    .score-bar {
+      height: 4px;
+      border-radius: 2px;
+      background: #21262d;
+      margin-top: 4px;
+    }
+
+    .score-fill {
+      height: 100%;
+      border-radius: 2px;
+      transition: width 0.4s ease;
+    }
+
+    /* ── Last updated ── */
+    .footer {
+      text-align: center;
+      color: #484f58;
+      font-size: 0.72rem;
+      padding: 16px;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<div class="header">
+  <h1>&#x26A0; Real-Time <span>Fraud Detection</span> Dashboard</h1>
+  <div style="display:flex; align-items:center; gap:16px;">
+    <span style="color:#8b949e; font-size:0.78rem;">
+      Auto-refresh: 5s &nbsp;|&nbsp; Kafka + Spark + PostgreSQL
+    </span>
+    <div class="live-badge">&#x25CF; LIVE</div>
+  </div>
+</div>
+
+<!-- ── Main ── -->
+<div class="container">
+
+  <!-- Summary Cards -->
+  <div class="cards">
+    <div class="card blue">
+      <div class="label">Total Transactions</div>
+      <div class="value" id="total">--</div>
+      <div class="sub">processed by Spark</div>
+    </div>
+    <div class="card red">
+      <div class="label">Fraud Detected</div>
+      <div class="value" id="fraud">--</div>
+      <div class="sub" id="fraud-pct">-- % of total</div>
+    </div>
+    <div class="card yellow">
+      <div class="label">Suspicious</div>
+      <div class="value" id="suspicious">--</div>
+      <div class="sub">under investigation</div>
+    </div>
+    <div class="card green">
+      <div class="label">Avg Fraud Score</div>
+      <div class="value" id="avg-score">--</div>
+      <div class="sub" id="last-updated">last updated: --</div>
+    </div>
+  </div>
+
+  <!-- Charts Row -->
+  <div class="charts-row">
+    <div class="chart-box">
+      <h3>&#x1F4C8; Fraud Rate Over Time (per minute)</h3>
+      <canvas id="fraudRateChart" height="110"></canvas>
+    </div>
+    <div class="chart-box">
+      <h3>&#x1F967; Transaction Classification</h3>
+      <canvas id="pieChart" height="160"></canvas>
+    </div>
+  </div>
+
+  <!-- Bottom Row -->
+  <div class="bottom-row">
+
+    <!-- Top Risky Merchants -->
+    <div class="table-box">
+      <h3>&#x1F3AF; Top Risky Merchants</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Merchant</th>
+            <th>Fraud</th>
+            <th>Rate</th>
+          </tr>
+        </thead>
+        <tbody id="merchant-table">
+          <tr><td colspan="3" style="color:#484f58">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Country Breakdown -->
+    <div class="table-box">
+      <h3>&#x1F30D; Fraud by Country</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Country</th>
+            <th>Fraud</th>
+            <th>Rate %</th>
+          </tr>
+        </thead>
+        <tbody id="country-table">
+          <tr><td colspan="3" style="color:#484f58">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Live Feed -->
+    <div class="feed">
+      <h3>&#x1F6A8; Live Transaction Feed</h3>
+      <div id="feed-list">
+        <div style="color:#484f58; font-size:0.78rem;">
+          Waiting for transactions...
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="footer" id="footer-time">
+  Last refreshed: --
+</div>
+
+<!-- ── JavaScript ── -->
+<script>
+const API = 'http://localhost:5000';
+const REFRESH = 5000;   // 5 seconds
+
+// ── Chart Setup ───────────────────────────────────────────────────────
+
+// Line chart — fraud rate over time
+const fraudRateCtx =
+  document.getElementById('fraudRateChart').getContext('2d');
+
+const fraudRateChart = new Chart(fraudRateCtx, {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [
+      {
+        label: 'Fraud %',
+        data: [],
+        borderColor: '#f85149',
+        backgroundColor: 'rgba(248,81,73,0.1)',
+        fill: true,
+        tension: 0.4,
+        pointRadius: 3,
+      },
+      {
+        label: 'Suspicious %',
+        data: [],
+        borderColor: '#e3b341',
+        backgroundColor: 'rgba(227,179,65,0.05)',
+        fill: false,
+        tension: 0.4,
+        pointRadius: 3,
+        borderDash: [4,4],
+      }
+    ]
+  },
+  options: {
+    responsive: true,
+    plugins: {
+      legend: {
+        labels: { color: '#8b949e', font: { size: 11 } }
+      }
+    },
+    scales: {
+      x: {
+        ticks: { color: '#484f58', font: { size: 10 } },
+        grid:  { color: '#21262d' }
+      },
+      y: {
+        ticks: {
+          color: '#484f58',
+          font: { size: 10 },
+          callback: v => v + '%'
+        },
+        grid:  { color: '#21262d' },
+        min: 0
+      }
+    }
+  }
+});
+
+// Pie chart — label distribution
+const pieCtx =
+  document.getElementById('pieChart').getContext('2d');
+
+const pieChart = new Chart(pieCtx, {
+  type: 'doughnut',
+  data: {
+    labels: ['Fraud', 'Suspicious', 'Legit'],
+    datasets: [{
+      data: [0, 0, 0],
+      backgroundColor: ['#f85149', '#e3b341', '#3fb950'],
+      borderColor: '#161b22',
+      borderWidth: 3,
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: {
+      legend: {
+        position: 'bottom',
+        labels: { color: '#8b949e', font: { size: 11 }, padding: 12 }
+      }
+    }
+  }
+});
+
+// ── Data Fetchers ─────────────────────────────────────────────────────
+
+async function fetchStats() {
+  const d = await fetch(`${API}/api/stats`).then(r => r.json());
+  document.getElementById('total').textContent =
+    (d.total || 0).toLocaleString();
+  document.getElementById('fraud').textContent =
+    (d.fraud || 0).toLocaleString();
+  document.getElementById('suspicious').textContent =
+    (d.suspicious || 0).toLocaleString();
+  document.getElementById('avg-score').textContent =
+    (d.avg_score || 0).toFixed(3);
+  document.getElementById('fraud-pct').textContent =
+    `${d.fraud_pct || 0}% of total`;
+  if (d.last_updated) {
+    const t = new Date(d.last_updated);
+    document.getElementById('last-updated').textContent =
+      `updated ${t.toLocaleTimeString()}`;
+  }
+}
+
+async function fetchFraudRate() {
+  const rows = await fetch(`${API}/api/fraud-rate`)
+                       .then(r => r.json());
+  const labels     = rows.map(r => {
+    const t = new Date(r.minute);
+    return t.getHours() + ':' +
+           String(t.getMinutes()).padStart(2,'0');
+  });
+  const fraudPct   = rows.map(r => r.fraud_pct || 0);
+  const suspPct    = rows.map(r =>
+    r.total > 0
+      ? +(100 * r.suspicious_count / r.total).toFixed(2)
+      : 0
+  );
+
+  fraudRateChart.data.labels          = labels;
+  fraudRateChart.data.datasets[0].data = fraudPct;
+  fraudRateChart.data.datasets[1].data = suspPct;
+  fraudRateChart.update('none');
+}
+
+async function fetchLabels() {
+  const rows = await fetch(`${API}/api/labels`)
+                       .then(r => r.json());
+  const map  = {};
+  rows.forEach(r => { map[r.fraud_label] = r.count; });
+  pieChart.data.datasets[0].data = [
+    map['FRAUD']      || 0,
+    map['SUSPICIOUS'] || 0,
+    map['LEGIT']      || 0,
+  ];
+  pieChart.update('none');
+}
+
+async function fetchMerchants() {
+  const rows = await fetch(`${API}/api/merchants`)
+                       .then(r => r.json());
+  const tbody = document.getElementById('merchant-table');
+  if (!rows.length) return;
+  tbody.innerHTML = rows.slice(0, 8).map(r => `
+    <tr>
+      <td>
+        <div style="font-weight:600; color:#f0f6fc">
+          ${r.merchant}
+        </div>
+        <div style="color:#484f58; font-size:0.7rem">
+          ${r.merchant_category}
+        </div>
+      </td>
+      <td style="color:#f85149; font-weight:600">
+        ${r.fraud_count}
+      </td>
+      <td>
+        <div>${r.fraud_pct || 0}%</div>
+        <div class="score-bar">
+          <div class="score-fill"
+               style="width:${Math.min(r.fraud_pct||0,100)}%;
+                      background:#f85149">
+          </div>
+        </div>
+      </td>
+    </tr>
+  `).join('');
+}
+
+async function fetchCountries() {
+  const rows = await fetch(`${API}/api/countries`)
+                       .then(r => r.json());
+  const tbody = document.getElementById('country-table');
+  if (!rows.length) return;
+
+  const riskColor = c => {
+    const hr = ['Nigeria','Russia','Unknown','Belarus'];
+    const mr = ['China','Brazil','Mexico','Turkey'];
+    if (hr.includes(c)) return '#f85149';
+    if (mr.includes(c)) return '#e3b341';
+    return '#3fb950';
+  };
+
+  tbody.innerHTML = rows.slice(0, 8).map(r => `
+    <tr>
+      <td style="color:${riskColor(r.country)}; font-weight:600">
+        ${r.country}
+      </td>
+      <td style="color:#f85149">${r.fraud_count}</td>
+      <td>${r.fraud_pct || 0}%</td>
+    </tr>
+  `).join('');
+}
+
+async function fetchFeed() {
+  const rows = await fetch(`${API}/api/transactions`)
+                       .then(r => r.json());
+  const el = document.getElementById('feed-list');
+  if (!rows.length) return;
+
+  el.innerHTML = rows.map(r => {
+    const label    = r.fraud_label || 'LEGIT';
+    const dotClass = label.toLowerCase() === 'fraud'
+                     ? 'fraud'
+                     : label.toLowerCase() === 'suspicious'
+                     ? 'suspicious' : 'legit';
+    const time = r.timestamp
+      ? new Date(r.timestamp).toLocaleTimeString()
+      : '--';
+
+    return `
+      <div class="feed-item">
+        <div class="dot ${dotClass}"></div>
+        <div style="flex:1; min-width:0">
+          <div style="display:flex;
+                      justify-content:space-between;
+                      align-items:center">
+            <span class="feed-merchant">
+              ${r.merchant}
+            </span>
+            <span class="badge ${label}">${label}</span>
+          </div>
+          <div class="feed-details">
+            $${parseFloat(r.amount).toFixed(2)} &nbsp;|&nbsp;
+            ${r.country} &nbsp;|&nbsp;
+            score: ${parseFloat(r.fraud_score).toFixed(3)}
+          </div>
+          <div class="feed-details">
+            ${r.merchant_category} &bull; ${time}
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// ── Refresh Loop ──────────────────────────────────────────────────────
+
+async function refresh() {
+  try {
+    await Promise.all([
+      fetchStats(),
+      fetchFraudRate(),
+      fetchLabels(),
+      fetchMerchants(),
+      fetchCountries(),
+      fetchFeed(),
+    ]);
+    document.getElementById('footer-time').textContent =
+      `Last refreshed: ${new Date().toLocaleTimeString()}`;
+  } catch(e) {
+    console.warn('Refresh error:', e.message);
+  }
+}
+
+// Initial load + interval
+refresh();
+setInterval(refresh, REFRESH);
+</script>
+
+</body>
+</html>
