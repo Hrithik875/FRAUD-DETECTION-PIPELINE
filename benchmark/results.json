@@ -1,0 +1,27 @@
+{
+  "dataset": "ULB Credit Card Fraud",
+  "total_transactions": 284807,
+  "fraud_rate_pct": 0.173,
+  "test_set_size": 56962,
+  "smote_applied": true,
+  "models": {
+    "logistic_regression": {
+      "precision": 0.134969,
+      "recall": 0.897959,
+      "f1": 0.234667,
+      "roc_auc": 0.97723
+    },
+    "random_forest": {
+      "precision": 0.835052,
+      "recall": 0.826531,
+      "f1": 0.830769,
+      "roc_auc": 0.964423
+    },
+    "rule_based_pipeline": {
+      "precision": 0.029314,
+      "recall": 0.540816,
+      "f1": 0.055614,
+      "roc_auc": null
+    }
+  }
+}
