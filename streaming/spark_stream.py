@@ -21,15 +21,20 @@ CHECKPOINT_MERCHANT = os.path.join(
     BASE_DIR, 'data_output', 'checkpoints', 'merchants'
 ).replace('\\', '/')
 
+CHECKPOINT_METRICS = os.path.join(
+    BASE_DIR, 'data_output', 'checkpoints', 'metrics'
+).replace('\\', '/')
+
 print(f"BASE_DIR         : {BASE_DIR}")
 print(f"CHECKPOINT_TXN   : {CHECKPOINT_TXN}")
 print(f"CHECKPOINT_MERCHANT: {CHECKPOINT_MERCHANT}")
+print(f"CHECKPOINT_METRICS : {CHECKPOINT_METRICS}")
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     from_json, col, when, lit,
     round as spark_round,
-    current_timestamp, window,
+    current_timestamp, unix_timestamp, window,
     count, avg,
     sum as spark_sum,
     udf
@@ -40,6 +45,8 @@ from pyspark.sql.types import (
     IntegerType, TimestampType
 )
 import configs.config as cfg
+import psycopg2
+from datetime import datetime
 
 # ── Schema ────────────────────────────────────────────────────────────
 TRANSACTION_SCHEMA = StructType([
@@ -51,6 +58,7 @@ TRANSACTION_SCHEMA = StructType([
     StructField("country",           StringType(),  True),
     StructField("home_country",      StringType(),  True),
     StructField("timestamp",         StringType(),  True),
+    StructField("produced_at",       DoubleType(),  True),
     StructField("v1",                DoubleType(),  True),
     StructField("v2",                DoubleType(),  True),
     StructField("v3",                DoubleType(),  True),
@@ -154,6 +162,51 @@ def write_merchant_stats_to_postgres(batch_df, batch_id):
         raise
 
 
+def write_pipeline_metrics(batch_df, batch_id):
+    """foreachBatch writer: inserts per-microbatch throughput and
+    average latency into the pipeline_metrics table."""
+    try:
+        batch_count = batch_df.count()
+        if batch_count == 0:
+            return
+
+        avg_latency_row = batch_df.agg(
+            {"processing_latency_ms": "avg"}
+        ).collect()[0][0]
+
+        conn = psycopg2.connect(
+            host=cfg.POSTGRES_HOST,
+            port=cfg.POSTGRES_PORT,
+            dbname=cfg.POSTGRES_DB,
+            user=cfg.POSTGRES_USER,
+            password=cfg.POSTGRES_PASSWORD
+        )
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO pipeline_metrics
+                        (recorded_at, batch_size, avg_latency_ms)
+                    VALUES (%s, %s, %s)
+                    """,
+                    (
+                        datetime.utcnow(),
+                        batch_count,
+                        float(avg_latency_row) if avg_latency_row is not None
+                        else None
+                    )
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+        print(f"  [METRICS {batch_id}] batch_size={batch_count} "
+              f"avg_latency_ms="
+              f"{avg_latency_row:.2f}" if avg_latency_row else "None")
+    except Exception as e:
+        print(f"  [ERROR] Metrics batch {batch_id}: {str(e)}")
+
+
 # ── Main ──────────────────────────────────────────────────────────────
 def main():
     print("=" * 62)
@@ -161,7 +214,7 @@ def main():
     print("=" * 62)
 
     # ── Verify checkpoint dirs exist ──────────────────────
-    for path in [CHECKPOINT_TXN, CHECKPOINT_MERCHANT]:
+    for path in [CHECKPOINT_TXN, CHECKPOINT_MERCHANT, CHECKPOINT_METRICS]:
         os.makedirs(path, exist_ok=True)
         print(f"[OK] Checkpoint dir: {path}")
 
@@ -226,6 +279,10 @@ def main():
         .withColumn(
             "processed_at",
             current_timestamp()
+        ) \
+        .withColumn(
+            "processing_latency_ms",
+            (col("processed_at").cast("double") - col("produced_at")) * 1000
         )
 
     # ── Transaction output columns ────────────────────────
@@ -250,10 +307,10 @@ def main():
     txn_query = transactions_out.writeStream \
         .foreachBatch(write_transactions_to_postgres) \
         .option("checkpointLocation", CHECKPOINT_TXN) \
-        .trigger(processingTime="10 seconds") \
+        .trigger(processingTime="2 seconds") \
         .start()
 
-    print("[OK] Transaction stream started (10s batches)")
+    print("[OK] Transaction stream started (2s batches)")
 
     # ── Merchant Aggregation ──────────────────────────────
     merchant_agg = scored \
@@ -306,11 +363,20 @@ def main():
     merchant_query = merchant_agg.writeStream \
         .foreachBatch(write_merchant_stats_to_postgres) \
         .option("checkpointLocation", CHECKPOINT_MERCHANT) \
-        .trigger(processingTime="30 seconds") \
+        .trigger(processingTime="2 seconds") \
         .outputMode("update") \
         .start()
 
-    print("[OK] Merchant stats stream started (30s batches)")
+    print("[OK] Merchant stats stream started (2s batches)")
+
+    # ── Stream 3: Pipeline Metrics ────────────────────────
+    metrics_query = scored.writeStream \
+        .foreachBatch(write_pipeline_metrics) \
+        .option("checkpointLocation", CHECKPOINT_METRICS) \
+        .trigger(processingTime="2 seconds") \
+        .start()
+
+    print("[OK] Pipeline metrics stream started (2s batches)")
     print("\n" + "=" * 62)
     print("  STREAMING IN PROGRESS - Waiting for data...")
     print("  Press Ctrl+C to stop")

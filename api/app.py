@@ -278,6 +278,50 @@ def health():
         }), 500
 
 
+
+# ── Pipeline Metrics ──────────────────────────────────────────────────
+
+@app.route('/api/metrics')
+def get_pipeline_metrics():
+    """Returns last 60 seconds of pipeline throughput and latency metrics."""
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT 
+                recorded_at,
+                batch_size,
+                avg_latency_ms
+            FROM pipeline_metrics
+            WHERE recorded_at >= NOW() - INTERVAL '60 seconds'
+            ORDER BY recorded_at DESC
+            LIMIT 20
+        """)
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        total_records = sum(r[1] for r in rows)
+        avg_latency = (
+            sum(r[2] for r in rows if r[2] is not None) /
+            max(len([r for r in rows if r[2] is not None]), 1)
+        )
+
+        return jsonify({
+            "recent_records_60s": total_records,
+            "avg_latency_ms": round(avg_latency, 2),
+            "data_points": [
+                {
+                    "recorded_at": r[0].isoformat(),
+                    "batch_size": r[1],
+                    "avg_latency_ms": r[2]
+                } for r in rows
+            ]
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ── Run ───────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':

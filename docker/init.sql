@@ -46,3 +46,14 @@ CREATE INDEX idx_merchant
     ON fraud_transactions(merchant);
 CREATE INDEX idx_merchant_stats
     ON merchant_stats(merchant);
+
+-- Pipeline metrics table (benchmark & performance observability)
+CREATE TABLE IF NOT EXISTS pipeline_metrics (
+    id SERIAL PRIMARY KEY,
+    recorded_at TIMESTAMP NOT NULL,
+    batch_size INTEGER NOT NULL,
+    avg_latency_ms FLOAT
+);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_metrics_recorded_at
+    ON pipeline_metrics(recorded_at);

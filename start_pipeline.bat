@@ -80,7 +80,7 @@ echo.
 :: ── Step 4.5: Clear old DB data ──────────────────────────────────────
 echo Clearing old transaction data...
 docker exec postgres_fraud psql -U frauduser -d frauddb ^
-    -c "TRUNCATE TABLE fraud_transactions RESTART IDENTITY; TRUNCATE TABLE merchant_stats RESTART IDENTITY;" >nul 2>&1
+    -c "TRUNCATE TABLE fraud_transactions RESTART IDENTITY; TRUNCATE TABLE merchant_stats RESTART IDENTITY; TRUNCATE TABLE pipeline_metrics RESTART IDENTITY;" >nul 2>&1
 echo [OK] Database cleared for fresh run.
 echo.
 
@@ -98,9 +98,11 @@ set "CKPT=%BASE%\data_output\checkpoints"
 
 if exist "%CKPT%\transactions" rmdir /s /q "%CKPT%\transactions"
 if exist "%CKPT%\merchants"    rmdir /s /q "%CKPT%\merchants"
+if exist "%CKPT%\metrics"      rmdir /s /q "%CKPT%\metrics"
 
 mkdir "%CKPT%\transactions"
 mkdir "%CKPT%\merchants"
+mkdir "%CKPT%\metrics"
 echo [OK] Checkpoints cleared and recreated.
 echo.
 
