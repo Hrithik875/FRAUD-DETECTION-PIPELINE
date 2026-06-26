@@ -55,3 +55,9 @@ DASHBOARD_REFRESH_SECONDS = 3
 # Producer Settings
 PRODUCER_DELAY_SECONDS = 1          # 1 transaction per second
 DATASET_PATH = "../data/creditcard.csv"
+
+# BENCHMARK & PERFORMANCE CONFIG
+PRODUCER_RATE_PER_SEC = 1           # default: 1 msg/sec (existing behavior)
+BENCHMARK_MODE = False              # when True: removes sleep, sends at max speed
+BENCHMARK_MESSAGE_COUNT = 100_000   # number of messages to send in benchmark mode
+METRICS_FLUSH_INTERVAL_SEC = 5      # how often to write throughput metrics to DB

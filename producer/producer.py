@@ -13,6 +13,7 @@
 import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+sys.stdout.reconfigure(encoding='utf-8')
 
 import json
 import time
@@ -24,7 +25,10 @@ from kafka import KafkaProducer
 from configs.config import (
     KAFKA_BROKER,
     KAFKA_TOPIC,
-    PRODUCER_DELAY_SECONDS
+    PRODUCER_DELAY_SECONDS,
+    PRODUCER_RATE_PER_SEC,
+    BENCHMARK_MODE,
+    BENCHMARK_MESSAGE_COUNT
 )
 
 # ── Configuration ─────────────────────────────────────────────────────
@@ -123,9 +127,9 @@ class UserProfileStore:
             profile["recent_amounts"].pop(0)
 
         # Slowly update avg_amount (exponential moving average)
-        profile["avg_amount"] = round(
-            0.8 * profile["avg_amount"] + 0.2 * amount, 2
-        )
+        # Clamp to max 5000 so fraud spikes don't corrupt the profile baseline
+        new_avg = 0.8 * profile["avg_amount"] + 0.2 * min(amount, 5000)
+        profile["avg_amount"] = round(min(new_avg, 5000), 2)
 
     def get_anomaly_score(self, card_number, amount,
                           country, category):
@@ -376,6 +380,7 @@ def build_transaction(row, index, card_number,
         "country":           country,
         "home_country":      home_country,
         "timestamp":         datetime.now().isoformat(),
+        "produced_at":       time.time(),
         "v1":                round(float(row['V1']), 6),
         "v2":                round(float(row['V2']), 6),
         "v3":                round(float(row['V3']), 6),
@@ -480,6 +485,10 @@ def main():
 
     # Load dataset — stratified pools
     fraud_df, legit_df = load_dataset()
+    
+    # Pre-convert to lists of dicts to avoid expensive sampling in the loop
+    fraud_records = fraud_df.to_dict('records')
+    legit_records = legit_df.to_dict('records')
 
     # Create components
     producer      = create_kafka_producer()
@@ -507,86 +516,125 @@ def main():
     index   = 0
 
     try:
-        while True:    # infinite stream (re-samples dataset)
+        if BENCHMARK_MODE:
+            # ── BENCHMARK MODE: send fixed count at max speed ──
+            print(f"\n  ⚡ BENCHMARK MODE: Sending "
+                  f"{BENCHMARK_MESSAGE_COUNT:,} messages at max speed")
+            start_time = time.time()
 
-            # Pick a card from the pool
-            card_number = random.choice(CARD_POOL)
+            for _ in range(BENCHMARK_MESSAGE_COUNT):
+                card_number = random.choice(CARD_POOL)
 
-            # Check if burst mode should trigger
-            burst_mgr.check_and_trigger(card_number)
+                if random.random() < FRAUD_RATE:
+                    row            = random.choice(fraud_records)
+                    label_override = "FRAUD"
+                else:
+                    row            = random.choice(legit_records)
+                    label_override = None
 
-            # ── Decide sampling strategy ──────────────────────
-            if burst_mgr.consume():
-                # BURST MODE: force fraud on burst card
-                row            = fraud_df.sample(1).iloc[0]
-                label_override = "FRAUD"
-                card_number    = burst_mgr.card
+                txn = build_transaction(
+                    row, index, card_number,
+                    profile_store, label_override
+                )
 
-            elif random.random() < FRAUD_RATE:
-                # STRATIFIED: sample from actual fraud rows
-                row            = fraud_df.sample(1).iloc[0]
-                label_override = "FRAUD"
+                producer.send(
+                    KAFKA_TOPIC,
+                    key=txn['card_number'],
+                    value=txn
+                )
 
-            else:
-                # NORMAL: sample from legit rows
-                # let probabilistic logic decide final label
-                row            = legit_df.sample(1).iloc[0]
-                label_override = None    # probabilistic path
+                index += 1
 
-            # Build transaction
-            txn = build_transaction(
-                row, index, card_number,
-                profile_store, label_override
-            )
+            producer.flush()
+            elapsed    = time.time() - start_time
+            throughput = BENCHMARK_MESSAGE_COUNT / elapsed
+            print(f"[BENCHMARK] Sent: {BENCHMARK_MESSAGE_COUNT:,} messages")
+            print(f"[BENCHMARK] Time: {elapsed:.2f}s")
+            print(f"[BENCHMARK] Throughput: {throughput:,.0f} messages/sec")
+            return
 
-            # Send to Kafka
-            producer.send(
-                KAFKA_TOPIC,
-                key=txn['card_number'],
-                value=txn
-            )
+        else:
+            # ── NORMAL MODE: infinite stream at configured rate ─
+            while True:    # infinite stream (re-samples dataset)
 
-            # Update counters
-            label = txn['producer_label']
-            counts[label]   += 1
-            counts["TOTAL"] += 1
-            index           += 1
+                # Pick a card from the pool
+                card_number = random.choice(CARD_POOL)
 
-            # Console display
-            icon = {"FRAUD": "🔴", "SUSPICIOUS": "🟡",
-                    "LEGIT": "🟢"}[label]
+                # Check if burst mode should trigger
+                burst_mgr.check_and_trigger(card_number)
 
-            print(
-                f"[{counts['TOTAL']:>6}]  "
-                f"{icon} {label:<12} "
-                f"${txn['amount']:>9.2f}  "
-                f"{txn['merchant']:<20} "
-                f"{txn['country']:<10}  "
-                f"{txn['anomaly_score']:>5.3f}  "
-                f"{txn['timestamp'][11:19]}"
-            )
+                # ── Decide sampling strategy ──────────────────────
+                if burst_mgr.consume():
+                    # BURST MODE: force fraud on burst card
+                    row            = random.choice(fraud_records)
+                    label_override = "FRAUD"
+                    card_number    = burst_mgr.card
 
-            # Stats every 25 messages
-            if counts["TOTAL"] % 25 == 0:
-                producer.flush()
-                total = counts["TOTAL"]
-                print(f"\n  {'─'*55}")
-                print(f"  📊 LIVE STATS @ {total} transactions")
-                print(f"  {'─'*55}")
-                print(f"  🔴 FRAUD      : "
-                      f"{counts['FRAUD']:>4} "
-                      f"({counts['FRAUD']/total*100:5.1f}%)")
-                print(f"  🟡 SUSPICIOUS : "
-                      f"{counts['SUSPICIOUS']:>4} "
-                      f"({counts['SUSPICIOUS']/total*100:5.1f}%)")
-                print(f"  🟢 LEGIT      : "
-                      f"{counts['LEGIT']:>4} "
-                      f"({counts['LEGIT']/total*100:5.1f}%)")
-                print(f"  ⚡ Bursts     : "
-                      f"{burst_mgr.total_bursts}")
-                print(f"  {'─'*55}\n")
+                elif random.random() < FRAUD_RATE:
+                    # STRATIFIED: sample from actual fraud rows
+                    row            = random.choice(fraud_records)
+                    label_override = "FRAUD"
 
-            time.sleep(PRODUCER_DELAY_SECONDS)
+                else:
+                    # NORMAL: sample from legit rows
+                    # let probabilistic logic decide final label
+                    row            = random.choice(legit_records)
+                    label_override = None    # probabilistic path
+
+                # Build transaction
+                txn = build_transaction(
+                    row, index, card_number,
+                    profile_store, label_override
+                )
+
+                # Send to Kafka
+                producer.send(
+                    KAFKA_TOPIC,
+                    key=txn['card_number'],
+                    value=txn
+                )
+
+                # Update counters
+                label = txn['producer_label']
+                counts[label]   += 1
+                counts["TOTAL"] += 1
+                index           += 1
+
+                # Console display
+                icon = {"FRAUD": "🔴", "SUSPICIOUS": "🟡",
+                        "LEGIT": "🟢"}[label]
+
+                print(
+                    f"[{counts['TOTAL']:>6}]  "
+                    f"{icon} {label:<12} "
+                    f"${txn['amount']:>9.2f}  "
+                    f"{txn['merchant']:<20} "
+                    f"{txn['country']:<10}  "
+                    f"{txn['anomaly_score']:>5.3f}  "
+                    f"{txn['timestamp'][11:19]}"
+                )
+
+                # Stats every 25 messages
+                if counts["TOTAL"] % 25 == 0:
+                    producer.flush()
+                    total = counts["TOTAL"]
+                    print(f"\n  {'─'*55}")
+                    print(f"  📊 LIVE STATS @ {total} transactions")
+                    print(f"  {'─'*55}")
+                    print(f"  🔴 FRAUD      : "
+                          f"{counts['FRAUD']:>4} "
+                          f"({counts['FRAUD']/total*100:5.1f}%)")
+                    print(f"  🟡 SUSPICIOUS : "
+                          f"{counts['SUSPICIOUS']:>4} "
+                          f"({counts['SUSPICIOUS']/total*100:5.1f}%)")
+                    print(f"  🟢 LEGIT      : "
+                          f"{counts['LEGIT']:>4} "
+                          f"({counts['LEGIT']/total*100:5.1f}%)")
+                    print(f"  ⚡ Bursts     : "
+                          f"{burst_mgr.total_bursts}")
+                    print(f"  {'─'*55}\n")
+
+                time.sleep(1 / PRODUCER_RATE_PER_SEC)
 
     except KeyboardInterrupt:
         print("\n\n⏹️  Producer stopped.")
@@ -612,4 +660,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main() 
