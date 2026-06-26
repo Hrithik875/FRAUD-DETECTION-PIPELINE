@@ -245,6 +245,64 @@
       font-size: 0.72rem;
       padding: 16px;
     }
+
+    /* ── Pipeline Health Bar ── */
+    .metrics-bar {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .metric-card {
+      flex: 1;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      padding: 16px 20px;
+    }
+
+    .metric-card.blue   { border-left: 3px solid #3B82F6; }
+    .metric-card.amber  { border-left: 3px solid #F59E0B; }
+    .metric-card.green  { border-left: 3px solid #10B981; }
+
+    .metric-card .m-value {
+      font-size: 1.9rem;
+      font-weight: 700;
+      line-height: 1;
+      margin-bottom: 6px;
+    }
+
+    .metric-card.blue  .m-value { color: #3B82F6; }
+    .metric-card.amber .m-value { color: #F59E0B; }
+    .metric-card.green .m-value { color: #10B981; }
+
+    .metric-card .m-label {
+      font-size: 0.72rem;
+      color: #8b949e;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    /* ── Sparkline Box ── */
+    .sparkline-box {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      padding: 14px 18px;
+      margin-bottom: 20px;
+    }
+
+    .sparkline-box h3 {
+      font-size: 0.78rem;
+      color: #8b949e;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 10px;
+    }
+
+    @media (max-width: 600px) {
+      .metrics-bar { flex-direction: column; }
+    }
   </style>
 </head>
 <body>
@@ -262,6 +320,28 @@
 
 <!-- ── Main ── -->
 <div class="container">
+
+  <!-- Pipeline Health Metrics Bar -->
+  <div class="metrics-bar">
+    <div class="metric-card blue">
+      <div class="m-value" id="m-records">--</div>
+      <div class="m-label">Records Last 60s</div>
+    </div>
+    <div class="metric-card amber">
+      <div class="m-value" id="m-latency">--</div>
+      <div class="m-label">Avg Pipeline Latency</div>
+    </div>
+    <div class="metric-card green">
+      <div class="m-value" id="m-throughput">--</div>
+      <div class="m-label">Approx Throughput</div>
+    </div>
+  </div>
+
+  <!-- Latency Sparkline -->
+  <div class="sparkline-box">
+    <h3>Pipeline Latency (ms) &mdash; last 60s</h3>
+    <canvas id="latencySparkline" height="120"></canvas>
+  </div>
 
   <!-- Summary Cards -->
   <div class="cards">
@@ -359,6 +439,43 @@ const API = 'http://localhost:5000';
 const REFRESH = 5000;   // 5 seconds
 
 // ── Chart Setup ───────────────────────────────────────────────────────
+
+// Latency sparkline chart
+const latencySparklineCtx =
+  document.getElementById('latencySparkline').getContext('2d');
+
+const latencySparkline = new Chart(latencySparklineCtx, {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [{
+      data: [],
+      borderColor: '#F59E0B',
+      backgroundColor: 'rgba(245,158,11,0.15)',
+      fill: true,
+      tension: 0.4,
+      pointRadius: 2,
+      borderWidth: 2,
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: {
+      legend: { display: false }
+    },
+    scales: {
+      x: {
+        ticks: { display: false },
+        grid:  { display: false }
+      },
+      y: {
+        ticks: { display: false },
+        grid:  { color: '#21262d' },
+        min: 0
+      }
+    }
+  }
+});
 
 // Line chart — fraud rate over time
 const fraudRateCtx =
@@ -594,6 +711,43 @@ async function fetchFeed() {
   }).join('');
 }
 
+// ── Metrics Fetcher ───────────────────────────────────────────────────
+
+async function fetchMetrics() {
+  const d = await fetch(`${API}/api/metrics`).then(r => r.json());
+  const records    = d.recent_records_60s || 0;
+  const latencyMs  = d.avg_latency_ms || 0;
+  const throughput = records / 60;
+
+  document.getElementById('m-records').textContent =
+    records.toLocaleString();
+  document.getElementById('m-latency').textContent =
+    latencyMs > 0 ? (latencyMs / 1000).toFixed(2) + 's' : '--';
+  document.getElementById('m-throughput').textContent =
+    throughput.toFixed(1) + ' msg/s';
+
+  const points = d.data_points || [];
+  if (points.length > 0) {
+    const MAX_POINTS = 20;
+    const current = latencySparkline.data.labels;
+    points.forEach(p => {
+      const t = new Date(p.recorded_at);
+      const label = t.toLocaleTimeString();
+      if (!current.includes(label)) {
+        current.push(label);
+        latencySparkline.data.datasets[0].data.push(p.avg_latency_ms);
+      }
+    });
+    if (current.length > MAX_POINTS) {
+      latencySparkline.data.labels =
+        current.slice(-MAX_POINTS);
+      latencySparkline.data.datasets[0].data =
+        latencySparkline.data.datasets[0].data.slice(-MAX_POINTS);
+    }
+    latencySparkline.update('none');
+  }
+}
+
 // ── Refresh Loop ──────────────────────────────────────────────────────
 
 async function refresh() {
@@ -605,6 +759,7 @@ async function refresh() {
       fetchMerchants(),
       fetchCountries(),
       fetchFeed(),
+      fetchMetrics(),
     ]);
     document.getElementById('footer-time').textContent =
       `Last refreshed: ${new Date().toLocaleTimeString()}`;
