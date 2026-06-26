@@ -79,7 +79,11 @@ Dataset:      ULB Credit Card Fraud (Kaggle, 284,807 transactions)
   pip install -r requirements.txt
 
   # 2. Start the pipeline (Kafka, PostgreSQL, Spark, Producer, Flask)
+  # Linux/Mac
   make up
+  
+  # Windows
+  start_pipeline.bat
 
   # 3. Open dashboard
   http://localhost:5000
@@ -88,7 +92,11 @@ Dataset:      ULB Credit Card Fraud (Kaggle, 284,807 transactions)
   make benchmark
 
   # 5. Stop the pipeline
+  # Linux/Mac
   make down
+  
+  # Windows
+  stop_pipeline.bat
 
 ## Dataset
 
