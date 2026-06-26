@@ -78,17 +78,17 @@ Dataset:      ULB Credit Card Fraud (Kaggle, 284,807 transactions)
   # 1. Clone and install dependencies
   pip install -r requirements.txt
 
-  # 2. Start infrastructure (Kafka + PostgreSQL)
-  docker-compose -f docker/docker-compose.yml up -d
+  # 2. Start the pipeline (Kafka, PostgreSQL, Spark, Producer, Flask)
+  make up
 
-  # 3. Start the pipeline
-  start_pipeline.bat        # Windows
-
-  # 4. Open dashboard
+  # 3. Open dashboard
   http://localhost:5000
 
-  # 5. Run ML benchmark (optional, standalone)
-  python benchmark/evaluate.py
+  # 4. Run ML benchmark (optional, standalone)
+  make benchmark
+
+  # 5. Stop the pipeline
+  make down
 
 ## Dataset
 
