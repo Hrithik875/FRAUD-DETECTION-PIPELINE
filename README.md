@@ -26,7 +26,7 @@ Real-time monitoring dashboard showing:
 ## Architecture
 
 <p align="center">
-  <img src="docs/ArchitectureDiagram.svg" alt="Fraud Detection Pipeline Architecture" width="100%">
+  <img src="docs/architecture.png" alt="Fraud Detection Pipeline Architecture" width="100%">
 </p>
 
 ### Flow
